@@ -28,6 +28,7 @@ from .global_vars import get_args
 from .utils import (unwrap_model,
                     print_rank_0)
 from megatron.model.enums import PositionEmbeddingType
+from megatron.utils import barrier
 
 
 _CHECKPOINT_VERSION = None
@@ -71,7 +72,7 @@ def check_checkpoint_args(checkpoint_args):
     # with alibi we can change `max_position_embeddings`
     if args.position_embedding_type != PositionEmbeddingType.alibi:
         _compare('max_position_embeddings')
-    if args.vocab_file:
+    if args.vocab_file or args.tokenizer_file:
         _compare('make_vocab_size_divisible_by')
         _compare('padded_vocab_size')
         _compare('tokenizer_type')
@@ -291,12 +292,13 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler):
         # Save model and optimizer together.
         state_dict = {**model_state_dict, **optim_state_dict}
         if state_dict: # only saves if populated (i.e., inherits conditions above)
+            print("Trying to save ...", flush=True)
             ensure_directory_exists(model_checkpoint_name)
             torch.save(state_dict, model_checkpoint_name)
 
     # Wait so everyone is done (necessary)
     if torch.distributed.is_initialized():
-        torch.distributed.barrier()
+        barrier()
 
     print_rank_0('  successfully saved checkpoint at iteration {:7d} to {}'.format(
         iteration, args.save))
@@ -309,7 +311,7 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler):
 
     # Wait so everyone is done (not necessary)
     if torch.distributed.is_initialized():
-        torch.distributed.barrier()
+        barrier()
 
 def _transpose_first_dim(t, num_splits, num_splits_first, model):
     input_shape = t.size()
@@ -504,6 +506,7 @@ def load_args_from_checkpoint(args, load_arg='load'):
     _set_arg('max_position_embeddings')
     _set_arg('tokenizer_type')
     _set_arg('padded_vocab_size')
+    _set_arg('attention_head_type')
     if checkpoint_version < 3.0:
         _set_arg('tensor_model_parallel_size',
                  'model_parallel_size')
@@ -677,7 +680,7 @@ def load_checkpoint(model, optimizer, opt_param_scheduler, load_arg='load', stri
 
     # Some utilities want to load a checkpoint without distributed being initialized
     if torch.distributed.is_initialized():
-        torch.distributed.barrier()
+        barrier()
 
     print_rank_0(f'  successfully loaded checkpoint from {load_dir} '
                  f'at iteration {iteration}')
